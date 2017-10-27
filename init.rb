@@ -77,3 +77,5 @@ end
 require 'redmine_tags/hooks/model_issue_hook'
 require 'redmine_tags/hooks/views_issues_hook'
 require 'redmine_tags/hooks/views_wiki_hook'
+
+#versao utilizada
