@@ -1,48 +1,43 @@
-# This file is a part of redmine_tags
-# Redmine plugin, that adds tagging support.
-#
-# Copyright (c) 2010 Aleksey V Zapparov AKA ixti
-#
-# redmine_tags is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# redmine_tags is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with redmine_tags.  If not, see <http://www.gnu.org/licenses/>.
-
-require_dependency 'issue'
-
 module RedmineTags
   module Patches
     module IssuePatch
       def self.included(base)
         base.extend(ClassMethods)
-
+        base.send(:include, InstanceMethods)
         base.class_eval do
-          unloadable
-          acts_as_taggable
+          acts_as_ordered_taggable
 
-          searchable_options[:columns] << "#{ActsAsTaggableOn::Tag.table_name}.name"
-          searchable_options[:include] << :tags
+          safe_attributes 'tag_list'
+          alias_method_chain :copy_from, :redmine_tags
+
+          searchable_options[:columns] << "tags.name"
+          searchable_options[:preload] << :tags
+          old_scope = searchable_options[:scope]
+          searchable_options[:scope] = lambda do |options|
+            new_scope = old_scope.is_a?(Proc) ? old_scope.call(options) : old_scope
+            new_scope
+              .joins("LEFT JOIN taggings ON taggings.taggable_id = issues.id AND taggings.context = 'tags' AND taggings.taggable_type = 'Issue'")
+              .joins('LEFT JOIN tags ON tags.id = taggings.tag_id')
+          end
+
+          # TODO: should we have this on or not?
+          # with this changes do not saved in journal
+          # Issue.safe_attributes 'tag_list'
+
+          # TODO: Not sure which one of these to keep yet
+          # scope :on_project, ->(project) {
+          #     project = project.id if project.is_a? Project
+          #     where "#{ Project.table_name }.id = ?", project
+          #   }
 
           scope :on_project, lambda { |project|
-            project = project.id if project.is_a? Project
-            { :conditions => ["#{Project.table_name}.id=?", project] }
+            project = Project.find(project) unless project.is_a? Project
+            where("#{project.project_condition(Setting.display_subprojects_issues?)}")
           }
-
-#          with this changes do not saved in journal
-#          Issue.safe_attributes 'tag_list'
         end
       end
 
       module ClassMethods
-
         # Returns available issue tags
         # === Parameters
         # * <i>options</i> = (optional) Options hash of
@@ -50,34 +45,22 @@ module RedmineTags
         #   * open_only - Boolean. Whenever search within open issues only.
         #   * name_like - String. Substring to filter found tags.
         def available_tags(options = {})
-          ids_scope = Issue.visible.select("#{Issue.table_name}.id").joins(:project)
-          ids_scope = ids_scope.on_project(options[:project]) if options[:project]
-          ids_scope = ids_scope.open.joins(:status) if options[:open_only]
+          issues_scope = Issue.visible.select('issues.id').joins(:project)
+          issues_scope = issues_scope.on_project(options[:project]) if options[:project]
+          issues_scope = issues_scope.joins(:status).open if options[:open_only]
 
-          conditions = [""]
+          result_scope = ActsAsTaggableOn::Tag
+            .joins(:taggings)
+            .select('tags.id, tags.name, tags.taggings_count, COUNT(taggings.id) as count')
+            .group('tags.id, tags.name, tags.taggings_count')
+            .where(taggings: { taggable_type: 'Issue', taggable_id: issues_scope})
 
-          sql_query = ids_scope.to_sql
-
-          conditions[0] << <<-SQL
-            tag_id IN (
-              SELECT #{ActsAsTaggableOn::Tagging.table_name}.tag_id
-                FROM #{ActsAsTaggableOn::Tagging.table_name}
-               WHERE #{ActsAsTaggableOn::Tagging.table_name}.taggable_id IN (#{sql_query}) AND #{ActsAsTaggableOn::Tagging.table_name}.taggable_type = 'Issue'
-            )
-          SQL
-
-          # limit to the tags matching given %name_like%
           if options[:name_like]
-            conditions[0] << case self.connection.adapter_name
-            when 'PostgreSQL'
-              "AND #{ActsAsTaggableOn::Tag.table_name}.name ILIKE ?"
-            else
-              "AND #{ActsAsTaggableOn::Tag.table_name}.name LIKE ?"
-            end
-            conditions << "%#{options[:name_like].downcase}%"
+            pattern = "%#{options[:name_like].to_s.strip}%"
+            result_scope = result_scope.where('LOWER(tags.name) LIKE LOWER(:p)', :p => pattern)
           end
 
-          self.all_tag_counts(:conditions => conditions, :order => "#{ActsAsTaggableOn::Tag.table_name}.name ASC")
+          result_scope
         end
 
         def remove_unused_tags!
@@ -88,7 +71,30 @@ module RedmineTags
           SQL
           unused.each(&:destroy)
         end
+
+        def get_common_tag_list_from_multiple_issues(ids)
+          common_tags = ActsAsTaggableOn::Tag.joins(:taggings)
+            .select('tags.id', 'tags.name')
+            .where(:taggings => {:taggable_type => 'Issue', :taggable_id => ids})
+            .group('tags.id')
+            .having("count(*) = #{ids.count}").to_a
+
+          ActsAsTaggableOn::TagList.new(common_tags)
+        end
+      end
+
+      module InstanceMethods
+        def copy_from_with_redmine_tags(arg, options = {})
+          copy_from_without_redmine_tags(arg, options)
+          issue = arg.is_a?(Issue) ? arg : Issue.visible.find(arg)
+          self.tag_list = issue.tag_list
+          self
+        end
       end
     end
   end
 end
+
+base = Issue
+patch = RedmineTags::Patches::IssuePatch
+base.send(:include, patch) unless base.included_modules.include?(patch)

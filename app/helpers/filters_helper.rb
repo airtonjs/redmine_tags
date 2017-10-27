@@ -1,21 +1,3 @@
-# This file is a part of redmine_tags
-# Redmine plugin, that adds tagging support.
-#
-# Copyright (c) 2010 Aleksey V Zapparov AKA ixti
-#
-# redmine_tags is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# redmine_tags is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with redmine_tags.  If not, see <http://www.gnu.org/licenses/>.
-
 module FiltersHelper
   # returns link to the page with issues filtered by specified filters
   # === parameters
@@ -30,7 +12,6 @@ module FiltersHelper
     link_to title, options
   end
 
-
   # returns hash suitable for passing it to the <tt>to_link</tt>
   # === parameters
   # * <i>filters</i> = array of arrays. each child array is an array of strings:
@@ -41,22 +22,21 @@ module FiltersHelper
   # filters = [[ :tags, '~', 'bazbaz' ], [:status_id, 'o']]
   # link_to 'bazbaz', link_to_filter_options filters
   def link_to_filter_options(filters)
-    options = {
-      :controller => 'issues',
-      :action => 'index',
-      :set_filter => 1,
-      :fields => [],
-      :values => {},
-      :operators => {}
-    }
+    options = { controller: 'issues', action: 'index', set_filter: 1,
+      fields: [], values: {}, operators: {}, f:[], v: {}, op: {} }
 
     filters.each do |f|
       name, operator, value = f
-      options[:fields].push(name)
-      options[:operators][name] = operator
-      options[:values][name] = [value]
-    end
 
+      options[:fields].push(name)
+      options[:f].push(name)
+
+      options[:operators][name] = operator
+      options[:op][name]        = operator
+
+      options[:values][name] = [value]
+      options[:v][name]      = [value]
+    end
     options
   end
 end
